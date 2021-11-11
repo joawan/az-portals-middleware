@@ -3,30 +3,31 @@ import fetch from 'node-fetch';
 
 const app = express();
 const port = process.env.NODE_PORT || 3000;
-const schAccEnv = process.env.SCHACCENV;
+const idPBaseUrl = new URL(process.env.IDP_BASE); //Will throw on invalid url
 
-const envs = {
-  'pre': 'https://identity-pre.schibsted.com',
-  'pro-com': 'https://login.schibsted.com',
-  'pro-no': 'https://payment.schibsted.no',
-};
+const cache = {};
 
-if (!envs[schAccEnv]) {
-  console.error('SCHACCENV must be set');
-  exit(1);
+const getOpenIdConf = async (conf) => {
+  if (!conf.cached || !cache.openIdConfig) {
+    const r = await fetch(`${idPBaseUrl}/.well-known/openid-configuration`);
+    cache.openIdConfig = await r.json();
+  }
+  return cache.openIdConfig;
 }
 
 app.get('/.well-known/openid-configuration', async (req, res) => {
-  const r = await fetch(`${envs[schAccEnv]}/.well-known/openid-configuration`);
-  const oc = await r.json();
-  oc.authorization_endpoint = `${req.protocol}://${req.hostname}/auth`;
-  res.json(oc);
+  const openIdConf = await getOpenIdConf({cached: false});
+  res.json({
+    ...openIdConf,
+    ...{ authorization_endpoint: `${req.protocol}://${req.hostname}/auth` },
+  });
 });
 
-app.get('/auth', (req, res) => {
+app.get('/auth', async (req, res) => {
+  const openIdConf = await getOpenIdConf({cached: true});
   const params = new URLSearchParams(req.query);
-  params.append('acr_values', 'otp-email');
-  res.redirect(307, `${envs[schAccEnv]}/oauth/authorize?${params.toString()}`);
+  params.set('acr_values', 'otp-email'); // The query param to set or override
+  res.redirect(307, `${openIdConf.authorization_endpoint}?${params.toString()}`);
 });
 
 app.listen(port, () => {
